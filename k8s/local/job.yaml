@@ -1,0 +1,32 @@
+# One-off Job variant of ../cronjob.yaml for local demo purposes — runs
+# immediately (instead of waiting on the */5 schedule) so `kubectl logs` shows
+# results right away. Re-apply (setup-local-demo.ps1 does this automatically)
+# to run again.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aks-ai-agent-demo
+  namespace: platform-ops
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: aks-ai-agent
+    spec:
+      serviceAccountName: aks-ai-agent
+      restartPolicy: Never
+      containers:
+        - name: aks-ai-agent
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: aks-ai-agent-secrets
+          volumeMounts:
+            - name: state
+              mountPath: /var/data
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: aks-ai-agent-state

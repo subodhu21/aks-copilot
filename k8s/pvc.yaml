@@ -1,0 +1,15 @@
+# Azure Files PVC — persists notification_state.json across CronJob runs.
+# ReadWriteMany allows safe access even if a job overlaps briefly.
+# Requires the azurefile-csi storage class (available by default on AKS).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aks-ai-agent-state
+  namespace: platform-ops
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: azurefile-csi
+  resources:
+    requests:
+      storage: 1Gi

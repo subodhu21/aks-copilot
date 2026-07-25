@@ -1,0 +1,65 @@
+# CronJob — deploy this manifest to EACH cluster unchanged.
+# Only the Secret (secret.yaml) differs per cluster.
+#
+# Workload Identity (recommended):
+#   1. Create a user-assigned managed identity in Azure
+#   2. Grant it "Cognitive Services OpenAI User" on your Azure OpenAI resource
+#   3. Grant it "Key Vault Secrets User" on your Key Vault
+#   4. Add the client ID annotation to the ServiceAccount in rbac.yaml
+#   5. Add label azure.workload.identity/use: "true" to the pod (uncomment below)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: aks-ai-agent
+  namespace: platform-ops
+spec:
+  schedule: "*/5 * * * *"        # every 5 minutes
+  timeZone: "Europe/London"
+  concurrencyPolicy: Forbid       # skip run if previous is still running
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Retry once on failure before marking as failed
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: aks-ai-agent
+            # Uncomment to enable Workload Identity token injection:
+            # azure.workload.identity/use: "true"
+        spec:
+          serviceAccountName: aks-ai-agent
+          restartPolicy: OnFailure
+
+          containers:
+            - name: aks-ai-agent
+              image: <your-acr>.azurecr.io/aks-ai-agent:latest
+              imagePullPolicy: Always
+
+              # Load all config from the Secret
+              envFrom:
+                - secretRef:
+                    name: aks-ai-agent-secrets
+
+              # Persist notification deduplication state across runs
+              volumeMounts:
+                - name: state
+                  mountPath: /var/data
+
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+
+          volumes:
+            - name: state
+              persistentVolumeClaim:
+                claimName: aks-ai-agent-state
+
+          # Pull from private ACR — create imagePullSecret if not using Managed Identity for ACR
+          # imagePullSecrets:
+          #   - name: acr-pull-secret

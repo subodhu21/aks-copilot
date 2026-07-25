@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Continue IDE config (may contain secrets)
+.continue/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+build-log.txt
+run-output.txt
+
+# Temporary
+.cache/
+.pytest_cache/
+.coverage
+
+# Runtime state
+notification_state.json
+
+# Pip Scripts (binaries)
+Scripts/
+
+# Corporate certs (local only)
+corporate-certs/

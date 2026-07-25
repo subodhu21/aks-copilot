@@ -1,0 +1,16 @@
+# Local-cluster variant of ../pvc.yaml.
+# minikube's default storage-provisioner only supports ReadWriteOnce and the
+# "standard" StorageClass (no azurefile-csi locally), so this is a separate
+# manifest rather than editing the AKS one.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aks-ai-agent-state
+  namespace: platform-ops
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 1Gi
