@@ -990,9 +990,80 @@ def _build_notification_content(pod_name, namespace, status, reason, error_logs,
 
 
 def _convert_markdown_to_slack(text):
-    """Convert Teams-style **bold** markdown to Slack mrkdwn *bold* syntax."""
+    """Convert standard Markdown to Slack mrkdwn syntax.
+
+    Handles:
+    - **bold** → *bold*
+    - Markdown tables → key: value lines (Slack has no table support)
+    - ### headings → *bold* lines
+    """
     import re
-    return re.sub(r'\*\*(.+?)\*\*', r'*\1*', text or "")
+    if not text:
+        return ""
+
+    lines = text.split("\n")
+    result = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Skip standalone horizontal rules (---, ***, ___)
+        if re.match(r'^[-*_]{3,}\s*$', stripped):
+            i += 1
+            continue
+
+        # Detect markdown table: header row with | separators
+        if "|" in stripped and stripped.startswith("|") and stripped.endswith("|"):
+            # Collect all table rows
+            table_rows = []
+            while i < len(lines) and lines[i].strip().startswith("|") and lines[i].strip().endswith("|"):
+                row = lines[i].strip()
+                # Skip separator rows like |---|---|  or | :---: | --- |
+                cells = [c.strip() for c in row.strip("|").split("|")]
+                if all(re.match(r'^[\s\-:]+$', c) for c in cells):
+                    i += 1
+                    continue
+                cells = [c.strip() for c in row.strip("|").split("|")]
+                table_rows.append(cells)
+                i += 1
+
+            if len(table_rows) >= 2:
+                headers = table_rows[0]
+                # Check if this is a 2-column key-value table
+                is_kv = len(headers) == 2
+                for data_row in table_rows[1:]:
+                    if is_kv and len(data_row) >= 2:
+                        # Render as "Key: Value" — first col is key, second is value
+                        key = re.sub(r'\*\*(.+?)\*\*', r'\1', data_row[0])
+                        val = re.sub(r'\*\*(.+?)\*\*', r'*\1*', data_row[1])
+                        result.append(f"• *{key}:* {val}")
+                    else:
+                        pairs = []
+                        for h, v in zip(headers, data_row):
+                            h_clean = re.sub(r'\*\*(.+?)\*\*', r'\1', h)
+                            v_clean = re.sub(r'\*\*(.+?)\*\*', r'*\1*', v)
+                            pairs.append(f"*{h_clean}:* {v_clean}")
+                        result.append(" | ".join(pairs))
+            elif len(table_rows) == 1:
+                cells = table_rows[0]
+                result.append(" | ".join(cells))
+            continue
+
+        # Convert ### headings to bold
+        heading_match = re.match(r'^(#{1,4})\s+(.+)', stripped)
+        if heading_match:
+            heading_text = re.sub(r'\*\*(.+?)\*\*', r'\1', heading_match.group(2))
+            result.append(f"\n*{heading_text}*")
+            i += 1
+            continue
+
+        # Convert **bold** to *bold*
+        converted = re.sub(r'\*\*(.+?)\*\*', r'*\1*', line)
+        result.append(converted)
+        i += 1
+
+    return "\n".join(result)
 
 
 def send_teams_notification(pod_name, namespace, status, reason, error_logs, k8s_context=None, related_pods=None, content=None):
@@ -1215,17 +1286,17 @@ def send_slack_notification(pod_name, namespace, status, reason, error_logs, k8s
         bar_color = "#ff9800"  # Orange for pending
 
     header_lines = [
-        f"*{'Primary Pod' if related_pods else 'Pod Name'}:* `{pod_name}`",
-        f"*Namespace:* `{namespace}`",
-        f"*Failure Reason:* *{reason}*",
-        f"*Pod Status:* *{reason}* (phase: {status})",
-        f"*K8s Context:* `{k8s_context or os.getenv('K8S_CONTEXT') or 'unknown'}`",
-        f"*Issue Category:* *{issue_category}*",
-        f"*Detected At:* {timestamp}",
+        f"   *{'Primary Pod' if related_pods else 'Pod Name'}:* {pod_name}",
+        f"   *Namespace:* {namespace}",
+        f"   *Failure Reason:* {reason}",
+        f"   *Pod Status:* {reason} (phase: {status})",
+        f"   *K8s Context:* {k8s_context or os.getenv('K8S_CONTEXT') or 'unknown'}",
+        f"   *Issue Category:* {issue_category}",
+        f"   *Detected At:* {timestamp}",
     ]
     if related_pods:
         header_lines.append(
-            "*Also Affected:* " + ", ".join(f"`{p['pod_name']}` ({p['reason']})" for p in related_pods)
+            "   *Also Affected:* " + ", ".join(f"{p['pod_name']} ({p['reason']})" for p in related_pods)
         )
 
     summary_text = (
@@ -1240,34 +1311,54 @@ def send_slack_notification(pod_name, namespace, status, reason, error_logs, k8s
         else "💡 AI Prescription — Recommended Fix"
     )
 
+    # Split long text into multiple Slack blocks to avoid "Show more" links.
+    # Slack shows "Show more" when a single section exceeds ~3000 chars.
+    def _indent(text, prefix="   "):
+        """Add consistent left indent to every line of text."""
+        return "\n".join(prefix + line if line.strip() else line for line in text.split("\n"))
+
+    def _split_blocks(title, text, max_len=2800):
+        """Return a list of section blocks, splitting text if needed."""
+        indented = _indent(text)
+        full = f"*{title}*\n{indented}" if title else indented
+        if len(full) <= max_len:
+            return [
+                {"type": "divider"},
+                {"type": "header", "text": {"type": "plain_text", "text": title, "emoji": True}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": indented}},
+            ]
+        # Split on paragraph boundaries (double newline) to keep readability
+        result = [
+            {"type": "divider"},
+            {"type": "header", "text": {"type": "plain_text", "text": title, "emoji": True}},
+        ]
+        chunk = ""
+        for para in indented.split("\n\n"):
+            candidate = chunk + para + "\n\n"
+            if len(candidate) > max_len and chunk.strip():
+                result.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk.rstrip()}})
+                chunk = para + "\n\n"
+            else:
+                chunk = candidate
+        if chunk.strip():
+            result.append({"type": "section", "text": {"type": "mrkdwn", "text": chunk.rstrip()}})
+        return result
+
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": "🚨 AI-Detected Kubernetes Incident", "emoji": True}},
+        {"type": "divider"},
         {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(header_lines)}},
         {"type": "divider"},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*🔍 Captured Signal — Log Evidence*\n```{error_summary}```\n_Check full logs with_ `kubectl logs -n {namespace} {pod_name}`"}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*🧠 Intelligent RCA — AI-Powered Insights*\n{ai_explanation}"[:3000]}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*{solution_title}*\n{ai_solution}"[:3000]}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"*🛠️ AI-Generated Recovery Playbook*\n{action_guide}"[:3000]}},
-        {
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "📊 View in Azure Portal", "emoji": True},
-                    "url": "https://portal.azure.com/",
-                },
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": f"📖 View {repo_name} Repo", "emoji": True},
-                    "url": repo_url or "https://dev.azure.com/techdatacorp/",
-                },
-            ],
-        },
+        {"type": "header", "text": {"type": "plain_text", "text": "🔍 Captured Signal — Log Evidence", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"   ```{error_summary}```\n   _Check full logs with_ `kubectl logs -n {namespace} {pod_name}`"}},
+        *_split_blocks("🧠 Intelligent RCA — AI-Powered Insights", ai_explanation),
+        *_split_blocks(solution_title, ai_solution),
+        *_split_blocks("🛠️ AI-Generated Recovery Playbook", action_guide),
     ]
 
     message = {
         "text": summary_text,
-        "attachments": [{"color": bar_color, "blocks": blocks}],
+        "blocks": blocks,
     }
 
     try:
