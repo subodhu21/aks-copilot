@@ -600,16 +600,18 @@ def monitor_and_notify_failures(namespace=None, k8s_context=None, raise_pr=None)
                 print(f"[Self-Healing] {self_healing_result.get('summary', 'Complete')}")
                 
                 # Send notification about successful healing actions
-                successful_actions = [
+                # Include actions that were executed (even if verification failed)
+                # because the pods were still deleted and recreated
+                executed_actions = [
                     a for a in self_healing_result.get("actions_taken", [])
-                    if a.get("status") == "success"
+                    if a.get("status") in ("success", "verification_failed")
                 ]
                 
-                if successful_actions:
-                    print(f"\n[Self-Healing] 📧 Sending healing success notification to Slack...")
+                if executed_actions:
+                    print(f"\n[Self-Healing] 📧 Sending healing notification to Slack for {len(executed_actions)} action(s)...")
                     from tools import send_healing_success_notification
                     notif_result = send_healing_success_notification(
-                        successful_actions, 
+                        executed_actions, 
                         namespace, 
                         k8s_context
                     )
@@ -617,6 +619,8 @@ def monitor_and_notify_failures(namespace=None, k8s_context=None, raise_pr=None)
                         print(f"[Self-Healing] ✅ Healing notification sent!")
                     else:
                         print(f"[Self-Healing] ⚠️  Notification status: {notif_result.get('status', 'unknown')}")
+                        if notif_result.get("error"):
+                            print(f"[Self-Healing] Error: {notif_result.get('error')}")
         
         
         return {

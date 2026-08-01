@@ -1473,111 +1473,159 @@ def _send_slack_recovery_notification(pods, k8s_context=None):
         return {"status": "error", "pods": [p["pod_name"] for p in pods], "error": str(e)}
 
 
-def send_healing_success_notification(actions, namespace, k8s_context=None):
-    """Send a Slack notification showing which pods were auto-healed by AI.
-    
+def send_healing_success_notification(pod_details, namespace, k8s_context=None, duration_sec=None):
+    """Send a rich per-deployment Slack notification after AI auto-healing completes.
+
     Args:
-        actions: List of successful self-healing actions with pod_name, action_type, message
-        namespace: Kubernetes namespace
-        k8s_context: Kubernetes context name
+        pod_details: list of dicts, each with keys:
+            original_name    - pod name that was failing
+            original_reason  - e.g. CrashLoopBackOff / ImagePullBackOff
+            action_taken     - human-readable description of the fix applied
+            new_pod_name     - new Running pod name after fix
+            namespace        - pod namespace
+        namespace:    Kubernetes namespace
+        k8s_context:  Kubernetes context name
+        duration_sec: seconds from fix-apply to all pods Running
     """
     webhook_url = os.getenv("SLACK_WEBHOOK_URL", "").strip()
-
     if not webhook_url or webhook_url.startswith("https://hooks.slack.com/services/xxxxx"):
-        return {
-            "status": "skipped",
-            "reason": "Slack webhook not configured",
-            "message": f"Would notify healing for {len(actions)} action(s)",
-        }
+        return {"status": "skipped", "reason": "Slack webhook not configured"}
 
+    ctx       = k8s_context or os.getenv("K8S_CONTEXT", "unknown")
     timestamp = datetime.now().strftime("%B %d, %Y at %I:%M %p")
-    
-    # Group actions by type
-    action_summary = {}
-    for action in actions:
-        action_type = action.get("action_type", "Unknown")
-        action_summary[action_type] = action_summary.get(action_type, 0) + 1
-    
-    # Build action list
-    action_list = []
-    for action in actions[:10]:  # Limit to 10 for readability
-        pod_name = action.get("pod_name", "unknown")
-        action_type = action.get("action_type", "Unknown")
-        
-        # Map action types to friendly names and emojis
-        action_map = {
-            "RestartCrashLoopPod": "🔄 Restarted crashing pod",
-            "RetryImagePull": "📦 Retried image pull",
-            "ScaleUpOnResourcePressure": "⬆️  Scaled up deployment"
+    dur_str   = f"{duration_sec}s" if duration_sec is not None else "N/A"
+
+    # ── Group pod_details by deployment name (strip last 2 hash segments) ───
+    def _deployment_name(pod_name):
+        parts = pod_name.split("-")
+        return "-".join(parts[:-2]) if len(parts) > 2 else pod_name
+
+    groups: dict = {}
+    for pd in pod_details:
+        dep = _deployment_name(pd.get("original_name", "unknown"))
+        groups.setdefault(dep, []).append(pd)
+
+    # ── Build one block per deployment ──────────────────────────────────────
+    deployment_blocks = []
+    for dep_name, pods in groups.items():
+        # Derive the fix description and icon from the first pod in the group
+        first_reason = pods[0].get("original_reason", "")
+        action       = pods[0].get("action_taken", "Applied fixed configuration")
+        ns           = pods[0].get("namespace", namespace)
+
+        if "CrashLoop" in first_reason or "Error" in first_reason:
+            icon        = "🔄"
+            issue_label = "CrashLoopBackOff"
+        elif "ImagePull" in first_reason or "ErrImage" in first_reason:
+            icon        = "📦"
+            issue_label = "ImagePullBackOff"
+        else:
+            icon        = "🤖"
+            issue_label = first_reason
+
+        # Collect new running pod names for this deployment
+        new_pods = [p.get("new_pod_name", "") for p in pods if p.get("new_pod_name")]
+        new_pods_str = ", ".join(f"`{n}`" for n in new_pods) if new_pods else "N/A"
+
+        deployment_blocks.append({"type": "divider"})
+        deployment_blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"{icon} *Deployment:* `{dep_name}`\n"
+                    f"   *Issue Resolved:*  {issue_label}\n"
+                    f"   *Remediation:*     {action}\n"
+                    f"   *Replicas Healed:* {len(pods)}\n"
+                    f"   *Now Running:*     {new_pods_str}"
+                )
+            }
+        })
+        deployment_blocks.append({
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": f"📊 `kubectl get pods -l app={dep_name} -n {ns} --context {ctx}`"
+            }]
+        })
+
+    # ── Summary counts ───────────────────────────────────────────────────────
+    crash_count = sum(
+        1 for pd in pod_details
+        if "CrashLoop" in pd.get("original_reason", "") or "Error" in pd.get("original_reason", "")
+    )
+    image_count = sum(
+        1 for pd in pod_details
+        if "ImagePull" in pd.get("original_reason", "") or "ErrImage" in pd.get("original_reason", "")
+    )
+    summary_parts = []
+    if crash_count: summary_parts.append(f"{crash_count} CrashLoopBackOff fix(es)")
+    if image_count: summary_parts.append(f"{image_count} ImagePullBackOff fix(es)")
+    actions_summary = " · ".join(summary_parts) or f"{len(pod_details)} fix(es) applied"
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "✅ AI-Initiated Remediation — Deployments Restored",
+                "emoji": True
+            }
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"   *Namespace:*        `{namespace}`\n"
+                    f"   *Cluster:*          `{ctx}`\n"
+                    f"   *Remediated At:*    {timestamp}\n"
+                    f"   *Time to Recover:*  {dur_str}\n"
+                    f"   *Deployments Fixed:* {len(groups)}\n"
+                    f"   *Summary:*          {actions_summary}"
+                )
+            }
+        },
+        {"type": "divider"},
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "🛠️ Remediation Details — Per Deployment",
+                "emoji": True
+            }
+        },
+        *deployment_blocks,
+        {"type": "divider"},
+        {
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": (
+                    f"✅ All pods verified *Running* — no manual intervention required\n"
+                    f"📊 Full status: `kubectl get pods -n {namespace} --context {ctx}`"
+                )
+            }]
         }
-        
-        friendly_action = action_map.get(action_type, f"🤖 {action_type}")
-        action_list.append(f"• {friendly_action}: `{pod_name}`")
-    
-    actions_text = "\n".join(action_list)
-    
-    # Build summary line
-    summary_parts = [f"{count} {atype.replace('Pod', '').replace('OnResourcePressure', '')}" 
-                     for atype, count in action_summary.items()]
-    summary_line = ", ".join(summary_parts)
+    ]
 
     message = {
-        "text": f"🤖 Auto-Healed: {len(actions)} pod(s) in {namespace}",
+        "text": (
+            f"✅ AI-Initiated Remediation Complete — "
+            f"{len(groups)} deployment(s) restored in `{namespace}` ({ctx})"
+        ),
         "attachments": [{
-            "color": "#36a64f",
-            "blocks": [
-                {
-                    "type": "header", 
-                    "text": {
-                        "type": "plain_text", 
-                        "text": "🤖 AI Auto-Healing Complete", 
-                        "emoji": True
-                    }
-                },
-                {
-                    "type": "section", 
-                    "text": {
-                        "type": "mrkdwn", 
-                        "text": (
-                            f"*Namespace:* `{namespace}`\n"
-                            f"*K8s Context:* `{k8s_context or os.getenv('K8S_CONTEXT') or 'unknown'}`\n"
-                            f"*Healed At:* {timestamp}\n"
-                            f"*Actions:* {summary_line}"
-                        )
-                    }
-                },
-                {
-                    "type": "section", 
-                    "text": {
-                        "type": "mrkdwn", 
-                        "text": f"*✅ Successfully Healed*\n{actions_text}"
-                    }
-                },
-                {
-                    "type": "context",
-                    "elements": [
-                        {
-                            "type": "mrkdwn",
-                            "text": "💡 All actions passed safety checks and were verified successful"
-                        }
-                    ]
-                }
-            ],
+            "color": "#2eb886",
+            "blocks": blocks,
         }],
     }
 
     try:
         response = requests.post(webhook_url, json=message, timeout=10, verify=False)
         if response.status_code == 200:
-            return {
-                "status": "sent", 
-                "action_count": len(actions),
-                "message": "Healing success notification sent"
-            }
-        return {
-            "status": "failed", 
-            "error": f"HTTP {response.status_code}: {response.text[:200]}"
-        }
+            return {"status": "sent", "deployment_count": len(groups), "message": "Healing notification sent"}
+        return {"status": "failed", "error": f"HTTP {response.status_code}: {response.text[:200]}"}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 

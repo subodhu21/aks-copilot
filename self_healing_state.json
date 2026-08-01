@@ -47,6 +47,22 @@
     "default/web-frontend-7ddbfd8b8-tw42p": {
       "action_type": "imagepull_retry",
       "timestamp": 1785591450.2064085
+    },
+    "default/web-frontend-7ddbfd8b8-gqfnf": {
+      "action_type": "imagepull_retry",
+      "timestamp": 1785592458.010583
+    },
+    "default/web-frontend-7ddbfd8b8-wmll9": {
+      "action_type": "imagepull_retry",
+      "timestamp": 1785592475.4747949
+    },
+    "default/web-frontend-7ddbfd8b8-v9w2h": {
+      "action_type": "imagepull_retry",
+      "timestamp": 1785592929.0905294
+    },
+    "default/web-frontend-7ddbfd8b8-wlnsk": {
+      "action_type": "imagepull_retry",
+      "timestamp": 1785592946.2676637
     }
   },
   "history": [
@@ -524,6 +540,133 @@
         "success": true,
         "message": "Pod deleted to retry image pull",
         "output": "pod \"web-frontend-7ddbfd8b8-tw42p\" deleted from default namespace\n"
+      },
+      "verification": {
+        "verified": false,
+        "message": "Failed to verify: Expecting value: line 1 column 1 (char 0)"
+      },
+      "message": "Action executed but verification failed: Failed to verify: Expecting value: line 1 column 1 (char 0)",
+      "rollback": {
+        "rolled_back": false,
+        "message": "No rollback implemented for this action"
+      }
+    },
+    {
+      "action_id": "api-gateway-6b5bbd5d-pxxxd-1785592457",
+      "action_type": "RestartCrashLoopPod",
+      "pod_name": "api-gateway-6b5bbd5d-pxxxd",
+      "namespace": "default",
+      "reason": "CrashLoopBackOff",
+      "timestamp": 1785592457.7628694,
+      "dry_run": false,
+      "status": "rejected",
+      "safety_check": {
+        "safe": false,
+        "reason": "Restart count (3) below threshold (5)"
+      },
+      "message": "Safety check failed: Restart count (3) below threshold (5)"
+    },
+    {
+      "action_id": "web-frontend-7ddbfd8b8-gqfnf-1785592457",
+      "action_type": "RetryImagePull",
+      "pod_name": "web-frontend-7ddbfd8b8-gqfnf",
+      "namespace": "default",
+      "reason": "ImagePullBackOff",
+      "timestamp": 1785592475.2803805,
+      "dry_run": false,
+      "status": "verification_failed",
+      "safety_check": {
+        "safe": true,
+        "reason": "Will retry image pull"
+      },
+      "execution": {
+        "success": true,
+        "message": "Pod deleted to retry image pull",
+        "output": "pod \"web-frontend-7ddbfd8b8-gqfnf\" deleted from default namespace\n"
+      },
+      "verification": {
+        "verified": false,
+        "message": "Failed to verify: Expecting value: line 1 column 1 (char 0)"
+      },
+      "message": "Action executed but verification failed: Failed to verify: Expecting value: line 1 column 1 (char 0)",
+      "rollback": {
+        "rolled_back": false,
+        "message": "No rollback implemented for this action"
+      }
+    },
+    {
+      "action_id": "web-frontend-7ddbfd8b8-wmll9-1785592457",
+      "action_type": "RetryImagePull",
+      "pod_name": "web-frontend-7ddbfd8b8-wmll9",
+      "namespace": "default",
+      "reason": "ImagePullBackOff",
+      "timestamp": 1785592491.9742272,
+      "dry_run": false,
+      "status": "verification_failed",
+      "safety_check": {
+        "safe": true,
+        "reason": "Will retry image pull"
+      },
+      "execution": {
+        "success": true,
+        "message": "Pod deleted to retry image pull",
+        "output": "pod \"web-frontend-7ddbfd8b8-wmll9\" deleted from default namespace\n"
+      },
+      "verification": {
+        "verified": false,
+        "message": "Failed to verify: Expecting value: line 1 column 1 (char 0)"
+      },
+      "message": "Action executed but verification failed: Failed to verify: Expecting value: line 1 column 1 (char 0)",
+      "rollback": {
+        "rolled_back": false,
+        "message": "No rollback implemented for this action"
+      }
+    },
+    {
+      "action_id": "web-frontend-7ddbfd8b8-v9w2h-1785592928",
+      "action_type": "RetryImagePull",
+      "pod_name": "web-frontend-7ddbfd8b8-v9w2h",
+      "namespace": "default",
+      "reason": "ImagePullBackOff",
+      "timestamp": 1785592946.0620513,
+      "dry_run": false,
+      "status": "verification_failed",
+      "safety_check": {
+        "safe": true,
+        "reason": "Will retry image pull"
+      },
+      "execution": {
+        "success": true,
+        "message": "Pod deleted to retry image pull",
+        "output": "pod \"web-frontend-7ddbfd8b8-v9w2h\" deleted from default namespace\n"
+      },
+      "verification": {
+        "verified": false,
+        "message": "Failed to verify: Expecting value: line 1 column 1 (char 0)"
+      },
+      "message": "Action executed but verification failed: Failed to verify: Expecting value: line 1 column 1 (char 0)",
+      "rollback": {
+        "rolled_back": false,
+        "message": "No rollback implemented for this action"
+      }
+    },
+    {
+      "action_id": "web-frontend-7ddbfd8b8-wlnsk-1785592928",
+      "action_type": "RetryImagePull",
+      "pod_name": "web-frontend-7ddbfd8b8-wlnsk",
+      "namespace": "default",
+      "reason": "ImagePullBackOff",
+      "timestamp": 1785592962.7684405,
+      "dry_run": false,
+      "status": "verification_failed",
+      "safety_check": {
+        "safe": true,
+        "reason": "Will retry image pull"
+      },
+      "execution": {
+        "success": true,
+        "message": "Pod deleted to retry image pull",
+        "output": "pod \"web-frontend-7ddbfd8b8-wlnsk\" deleted from default namespace\n"
       },
       "verification": {
         "verified": false,
