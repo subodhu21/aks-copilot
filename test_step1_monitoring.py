@@ -52,6 +52,35 @@ for namespace in NAMESPACES:
                         print(f"  - Skipped (system pod): {pr.get('summary', pr.get('reason', ''))}")
                     else:
                         print(f"  - PR failed: {pr.get('error', 'unknown error')}")
+
+        # Display self-healing results
+        self_healing = result["data"].get("self_healing")
+        if self_healing:
+            print(f"\n{'='*50}")
+            print("SELF-HEALING ACTIONS")
+            print(f"{'='*50}")
+            print(f"Enabled: {self_healing.get('enabled', False)}")
+            print(f"Mode: {self_healing.get('mode', 'unknown')}")
+            print(f"Dry Run: {self_healing.get('dry_run', False)}")
+            print(f"Summary: {self_healing.get('summary', 'N/A')}")
+            
+            actions_taken = self_healing.get("actions_taken", [])
+            if actions_taken:
+                print(f"\nActions Executed: {len(actions_taken)}")
+                for action in actions_taken:
+                    status_icon = "✓" if action.get("status") == "success" else "⚠"
+                    print(f"  {status_icon} {action.get('action_type', 'Unknown')}")
+                    print(f"    Pod: {action.get('pod_name', 'N/A')}")
+                    print(f"    Status: {action.get('status', 'unknown')}")
+                    print(f"    Message: {action.get('message', 'N/A')}")
+            
+            actions_skipped = self_healing.get("actions_skipped", [])
+            if actions_skipped:
+                print(f"\nActions Skipped: {len(actions_skipped)}")
+                for action in actions_skipped:
+                    print(f"  - {action.get('action_type', 'Unknown')}")
+                    print(f"    Pod: {action.get('pod_name', 'N/A')}")
+                    print(f"    Reason: {action.get('message', action.get('reason', 'N/A'))}")
     else:
         print(f"Error: {result.get('error', 'Unknown error')}")
 

@@ -1,0 +1,55 @@
+# Demo: Web Frontend with non-existent image causing ImagePullBackOff
+# Self-healing will retry if created recently (< 30 min)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-frontend
+  namespace: default
+  labels:
+    app: web-frontend
+    tier: frontend
+    demo: imagepull
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web-frontend
+  template:
+    metadata:
+      labels:
+        app: web-frontend
+        tier: frontend
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: frontend
+        # Intentionally wrong image to trigger ImagePullBackOff
+        image: mycompany.azurecr.io/web-frontend:v2.5.0-nonexistent
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+        env:
+        - name: API_ENDPOINT
+          value: "http://api-gateway-service:8080"
+        - name: ENVIRONMENT
+          value: "demo"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-frontend-service
+  namespace: default
+spec:
+  selector:
+    app: web-frontend
+  ports:
+  - port: 80
+    targetPort: 80
+  type: LoadBalancer

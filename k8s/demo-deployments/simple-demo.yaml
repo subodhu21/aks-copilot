@@ -1,0 +1,73 @@
+# Simplified Self-Healing Demo - 2 Easy Scenarios
+# These are the easiest to demonstrate and verify
+---
+# 1. API Gateway - CrashLoopBackOff (Quick restarts, easy to see)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: default
+  labels:
+    app: api-gateway
+    demo: simple
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: gateway
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "=== API Gateway Starting ==="
+          echo "ERROR: Missing REDIS_HOST environment variable" >&2
+          echo "FATAL: Cannot start without Redis" >&2
+          exit 1
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"
+---
+# 2. Web Frontend - ImagePullBackOff (Fresh pods will be retried)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-frontend
+  namespace: default
+  labels:
+    app: web-frontend
+    demo: simple
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web-frontend
+  template:
+    metadata:
+      labels:
+        app: web-frontend
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: frontend
+        image: mycompany.azurecr.io/nonexistent-image:v1.0.0
+        imagePullPolicy: Always
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "50m"
+          limits:
+            memory: "64Mi"
+            cpu: "100m"

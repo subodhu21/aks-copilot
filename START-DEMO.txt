@@ -1,0 +1,83 @@
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                      ║
+║  🎬 KUBERNETES SELF-HEALING DEMO - ONE COMMAND                      ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+RUN THIS COMMAND:
+═══════════════════════════════════════════════════════════════════════
+
+    C:\Python311\python.exe run-complete-demo.py
+
+
+WHAT HAPPENS (3 minutes total):
+═══════════════════════════════════════════════════════════════════════
+
+  0:00  Cleanup & Deploy broken pods
+  0:55  Pods fail (CrashLoopBackOff, ImagePullBackOff)
+  1:00  AI detects failures & sends Slack notification
+  
+  ╔════════════════════════════════════════════════════════════════╗
+  ║  1:10 - 2:10  ⏱️  YOUR 1-MINUTE PRESENTATION WINDOW!         ║
+  ║                                                                ║
+  ║  During this time:                                             ║
+  ║  • Show Slack notification                                     ║
+  ║  • Explain dashboard failures                                  ║
+  ║  • Watch countdown: "Auto-healing in 30 seconds..."            ║
+  ║  • Build anticipation                                          ║
+  ╚════════════════════════════════════════════════════════════════╝
+  
+  2:10  🤖 AI auto-heals (restart/retry pods)
+  2:20  🔧 Configuration fixes applied
+  2:50  ✅ All pods healthy and green!
+
+
+DURING THE DEMO:
+═══════════════════════════════════════════════════════════════════════
+
+Console shows countdown:
+  [Self-Healing] ⏳ Waiting 60 seconds before starting auto-healing...
+  [Self-Healing] ⏱️  Auto-healing starts in 60 seconds...
+  [Self-Healing] ⏱️  Auto-healing starts in 50 seconds...
+  ...
+  [Self-Healing] 🤖 Starting auto-healing now!
+
+
+WHAT TO SHOW:
+═══════════════════════════════════════════════════════════════════════
+
+✓ Slack channel - failure notification
+✓ Dashboard (http://127.0.0.1:63390) - red pods, then green
+✓ Console - countdown timer
+✓ Pod details - logs, events, status
+
+
+EXPECTED RESULT:
+═══════════════════════════════════════════════════════════════════════
+
+  NAME                          READY   STATUS    RESTARTS
+  api-gateway-xxx               1/1     Running   0
+  api-gateway-yyy               1/1     Running   0
+  web-frontend-zzz              1/1     Running   0
+  web-frontend-www              1/1     Running   0
+
+  ✅ All 4 pods green and healthy in dashboard
+
+
+DOCUMENTATION:
+═══════════════════════════════════════════════════════════════════════
+
+  RUN-DEMO.md              - Complete guide
+  COMPLETE-DEMO-READY.md   - Summary
+  DEMO-READY-WITH-DELAY.md - Configuration
+
+
+RUN AGAIN:
+═══════════════════════════════════════════════════════════════════════
+
+The script is fully repeatable - just run the same command again!
+
+
+═══════════════════════════════════════════════════════════════════════
+🎉 You're ready! Just run the command above and present!
+═══════════════════════════════════════════════════════════════════════

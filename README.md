@@ -16,6 +16,28 @@ Local AI-powered AKS assistant that evolves across four maturity levels:
 3. **Autonomous remediation engine** — Safe remediation plans & execution
 4. **Platform engineering AI assistant** — Strategic guidance & KPIs
 
+## ✨ New: Self-Healing Actions
+
+**Automated pod failure remediation is now available!**
+
+The agent can now automatically detect and fix common Kubernetes pod failures:
+- 🔄 **Auto-restart CrashLoopBackOff pods**
+- 📈 **Auto-scale on OOMKilled**
+- 🔁 **Retry ImagePullBackOff** (transient registry issues)
+
+**Quick Start:**
+```powershell
+.\setup-self-healing.ps1
+```
+
+**Documentation:**
+- Quick Start: [SELF-HEALING-README.md](SELF-HEALING-README.md)
+- Full Guide: [SELF-HEALING-GUIDE.md](SELF-HEALING-GUIDE.md)
+
+Self-healing includes safety features: rate limiting, cooldowns, validation checks, verification, rollback, and dry-run mode for testing.
+
+---
+
 ## 🚀 Quick Start
 
 ### Prerequisites

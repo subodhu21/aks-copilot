@@ -1473,6 +1473,115 @@ def _send_slack_recovery_notification(pods, k8s_context=None):
         return {"status": "error", "pods": [p["pod_name"] for p in pods], "error": str(e)}
 
 
+def send_healing_success_notification(actions, namespace, k8s_context=None):
+    """Send a Slack notification showing which pods were auto-healed by AI.
+    
+    Args:
+        actions: List of successful self-healing actions with pod_name, action_type, message
+        namespace: Kubernetes namespace
+        k8s_context: Kubernetes context name
+    """
+    webhook_url = os.getenv("SLACK_WEBHOOK_URL", "").strip()
+
+    if not webhook_url or webhook_url.startswith("https://hooks.slack.com/services/xxxxx"):
+        return {
+            "status": "skipped",
+            "reason": "Slack webhook not configured",
+            "message": f"Would notify healing for {len(actions)} action(s)",
+        }
+
+    timestamp = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+    
+    # Group actions by type
+    action_summary = {}
+    for action in actions:
+        action_type = action.get("action_type", "Unknown")
+        action_summary[action_type] = action_summary.get(action_type, 0) + 1
+    
+    # Build action list
+    action_list = []
+    for action in actions[:10]:  # Limit to 10 for readability
+        pod_name = action.get("pod_name", "unknown")
+        action_type = action.get("action_type", "Unknown")
+        
+        # Map action types to friendly names and emojis
+        action_map = {
+            "RestartCrashLoopPod": "🔄 Restarted crashing pod",
+            "RetryImagePull": "📦 Retried image pull",
+            "ScaleUpOnResourcePressure": "⬆️  Scaled up deployment"
+        }
+        
+        friendly_action = action_map.get(action_type, f"🤖 {action_type}")
+        action_list.append(f"• {friendly_action}: `{pod_name}`")
+    
+    actions_text = "\n".join(action_list)
+    
+    # Build summary line
+    summary_parts = [f"{count} {atype.replace('Pod', '').replace('OnResourcePressure', '')}" 
+                     for atype, count in action_summary.items()]
+    summary_line = ", ".join(summary_parts)
+
+    message = {
+        "text": f"🤖 Auto-Healed: {len(actions)} pod(s) in {namespace}",
+        "attachments": [{
+            "color": "#36a64f",
+            "blocks": [
+                {
+                    "type": "header", 
+                    "text": {
+                        "type": "plain_text", 
+                        "text": "🤖 AI Auto-Healing Complete", 
+                        "emoji": True
+                    }
+                },
+                {
+                    "type": "section", 
+                    "text": {
+                        "type": "mrkdwn", 
+                        "text": (
+                            f"*Namespace:* `{namespace}`\n"
+                            f"*K8s Context:* `{k8s_context or os.getenv('K8S_CONTEXT') or 'unknown'}`\n"
+                            f"*Healed At:* {timestamp}\n"
+                            f"*Actions:* {summary_line}"
+                        )
+                    }
+                },
+                {
+                    "type": "section", 
+                    "text": {
+                        "type": "mrkdwn", 
+                        "text": f"*✅ Successfully Healed*\n{actions_text}"
+                    }
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": "💡 All actions passed safety checks and were verified successful"
+                        }
+                    ]
+                }
+            ],
+        }],
+    }
+
+    try:
+        response = requests.post(webhook_url, json=message, timeout=10, verify=False)
+        if response.status_code == 200:
+            return {
+                "status": "sent", 
+                "action_count": len(actions),
+                "message": "Healing success notification sent"
+            }
+        return {
+            "status": "failed", 
+            "error": f"HTTP {response.status_code}: {response.text[:200]}"
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
 def monitor_and_notify_failing_pods(namespace="default", k8s_context=None, raise_pr=False):
     """
     Main function: Detect failing pods, send consolidated MS Teams + Slack
@@ -1574,12 +1683,26 @@ def monitor_and_notify_failing_pods(namespace="default", k8s_context=None, raise
 
     # Send one consolidated recovery notification per deployment for pods that
     # were previously alerted and have since healed.
+    # NOTE: Skip recovery notifications if self-healing is enabled in auto mode,
+    # because pods are deleted during healing and would immediately trigger
+    # false "recovered" alerts before the fixed config is applied.
+    send_recovery_notifications = os.getenv("SEND_RECOVERY_NOTIFICATIONS", "yes").strip().lower() == "yes"
+    
     recovered_count = len(recovered_pods)
-    for group_pods in _group_pods_by_deployment(recovered_pods).values():
-        if _NOTIFY_TEAMS:
-            notification_results.append(_send_recovery_notification(group_pods, k8s_context=k8s_context))
-        if _NOTIFY_SLACK:
-            notification_results.append(_send_slack_recovery_notification(group_pods, k8s_context=k8s_context))
+    if send_recovery_notifications:
+        for group_pods in _group_pods_by_deployment(recovered_pods).values():
+            if _NOTIFY_TEAMS:
+                notification_results.append(_send_recovery_notification(group_pods, k8s_context=k8s_context))
+            if _NOTIFY_SLACK:
+                notification_results.append(_send_slack_recovery_notification(group_pods, k8s_context=k8s_context))
+    else:
+        # Still track recovered_count for summary, but don't send notifications
+        if recovered_count > 0:
+            notification_results.append({
+                "status": "skipped",
+                "reason": "Recovery notifications disabled (SEND_RECOVERY_NOTIFICATIONS=no)",
+                "message": f"Skipped recovery notifications for {recovered_count} pod(s)"
+            })
 
     _save_notification_state(notif_state)
 

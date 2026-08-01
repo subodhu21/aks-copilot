@@ -1,0 +1,114 @@
+# Fixed: Web Frontend with real nginx image - will run successfully
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-frontend
+  namespace: default
+  labels:
+    app: web-frontend
+    tier: frontend
+    demo: imagepull-fixed
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web-frontend
+  template:
+    metadata:
+      labels:
+        app: web-frontend
+        tier: frontend
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: frontend
+        # FIXED: Using real nginx image instead of non-existent one
+        image: nginx:1.27-alpine
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 80
+        env:
+        - name: API_ENDPOINT
+          value: "http://api-gateway-service:8080"
+        - name: ENVIRONMENT
+          value: "demo"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        # Add custom index.html to show it's working
+        volumeMounts:
+        - name: html
+          mountPath: /usr/share/nginx/html
+      volumes:
+      - name: html
+        configMap:
+          name: web-frontend-html
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-frontend-html
+  namespace: default
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Web Frontend - Healthy</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            }
+            .container {
+                text-align: center;
+                background: white;
+                padding: 3rem;
+                border-radius: 10px;
+                box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            }
+            h1 {
+                color: #28a745;
+                margin-bottom: 1rem;
+            }
+            .status {
+                font-size: 1.2rem;
+                color: #555;
+            }
+            .checkmark {
+                font-size: 4rem;
+                color: #28a745;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="checkmark">✅</div>
+            <h1>Web Frontend is Healthy!</h1>
+            <p class="status">Self-healing successfully fixed the ImagePullBackOff issue</p>
+            <p class="status">Now serving traffic on nginx:1.27-alpine</p>
+        </div>
+    </body>
+    </html>
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-frontend-service
+  namespace: default
+spec:
+  selector:
+    app: web-frontend
+  ports:
+  - port: 80
+    targetPort: 80
+  type: LoadBalancer

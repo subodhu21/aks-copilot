@@ -561,8 +561,11 @@ def monitor_and_notify_failures(namespace=None, k8s_context=None, raise_pr=None)
     Detects pods with major impact issues (CrashLoopBackOff, OOMKilled,
     ImagePullBackOff, etc.), sends MS Teams notifications, and optionally
     raises an auto-fix PR in Azure DevOps (requires AZURE_DEVOPS_PAT).
+    
+    Also executes self-healing actions if enabled.
     """
     from tools import monitor_and_notify_failing_pods
+    from self_healing import evaluate_and_heal, SELF_HEALING_ENABLED
 
     if not k8s_context:
         k8s_context = os.getenv("K8S_CONTEXT")
@@ -573,6 +576,49 @@ def monitor_and_notify_failures(namespace=None, k8s_context=None, raise_pr=None)
 
     try:
         result = monitor_and_notify_failing_pods(namespace, k8s_context, raise_pr=raise_pr)
+        
+        # Execute self-healing if enabled
+        if SELF_HEALING_ENABLED:
+            failing_pods = result.get("detection", {}).get("failing_pods", [])
+            if failing_pods:
+                print(f"\n[Self-Healing] Evaluating {len(failing_pods)} failing pods...")
+                
+                # DEMO: Wait 1 minute after notification before starting auto-healing
+                # This allows time to show "Pod failure detected!" before "AI is healing..."
+                import time
+                delay_seconds = int(os.getenv("SELF_HEALING_DELAY_SECONDS", "60"))  # Default 60 seconds
+                if delay_seconds > 0:
+                    print(f"[Self-Healing] ⏳ Waiting {delay_seconds} seconds before starting auto-healing...")
+                    print(f"[Self-Healing] 💡 This delay allows you to show the failure notification in your demo")
+                    for remaining in range(delay_seconds, 0, -10):
+                        print(f"[Self-Healing] ⏱️  Auto-healing starts in {remaining} seconds...")
+                        time.sleep(min(10, remaining))
+                    print(f"[Self-Healing] 🤖 Starting auto-healing now!\n")
+                
+                self_healing_result = evaluate_and_heal(failing_pods, namespace, k8s_context)
+                result["self_healing"] = self_healing_result
+                print(f"[Self-Healing] {self_healing_result.get('summary', 'Complete')}")
+                
+                # Send notification about successful healing actions
+                successful_actions = [
+                    a for a in self_healing_result.get("actions_taken", [])
+                    if a.get("status") == "success"
+                ]
+                
+                if successful_actions:
+                    print(f"\n[Self-Healing] 📧 Sending healing success notification to Slack...")
+                    from tools import send_healing_success_notification
+                    notif_result = send_healing_success_notification(
+                        successful_actions, 
+                        namespace, 
+                        k8s_context
+                    )
+                    if notif_result.get("status") == "sent":
+                        print(f"[Self-Healing] ✅ Healing notification sent!")
+                    else:
+                        print(f"[Self-Healing] ⚠️  Notification status: {notif_result.get('status', 'unknown')}")
+        
+        
         return {
             "status": "success",
             "data": result,
