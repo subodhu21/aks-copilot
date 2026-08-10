@@ -21,6 +21,7 @@ load_dotenv()
 
 # ── config ───────────────────────────────────────────────────────────────────
 CONTEXT        = os.getenv("K8S_CONTEXT", "aks-ai-agent-demo")
+AWS_PROFILE    = os.getenv("AWS_PROFILE", "my-sso")
 NAMESPACE      = os.getenv("K8S_NAMESPACE", "default")
 SLACK_URL      = os.getenv("SLACK_WEBHOOK_URL", "").strip()
 HEAL_DELAY_SEC = int(os.getenv("SELF_HEALING_DELAY_SECONDS", "60"))
@@ -227,12 +228,57 @@ def all_pods_running(deployments):
 
 
 # ── main demo ─────────────────────────────────────────────────────────────────
+def ensure_aws_login():
+    """Check if AWS SSO session is valid; trigger login if expired."""
+    banner("🔐  AWS SSO Login Check", color="\033[94m")
+    info(f"Profile: {AWS_PROFILE}")
+
+    # Test credentials by calling STS get-caller-identity
+    result = subprocess.run(
+        f"aws sts get-caller-identity --profile {AWS_PROFILE}",
+        shell=True, capture_output=True, text=True, timeout=15
+    )
+
+    if result.returncode == 0:
+        # Already logged in — extract account/role for display
+        import json as _json
+        try:
+            identity = _json.loads(result.stdout)
+            ok(f"Already logged in — Account: {identity.get('Account')}  "
+               f"Role: {identity.get('Arn', '').split('/')[-1]}")
+        except Exception:
+            ok("AWS session is valid — skipping login")
+        return
+
+    # Session expired or not logged in
+    warn("AWS SSO session expired or not found — launching login …")
+    print()
+    print("  A browser window will open for AWS SSO authentication.")
+    print("  Complete the login, then return here.\n")
+
+    login_result = subprocess.run(
+        f"aws sso login --profile {AWS_PROFILE}",
+        shell=True, timeout=300   # give up to 5 minutes to complete browser auth
+    )
+
+    if login_result.returncode == 0:
+        ok("AWS SSO login successful!")
+    else:
+        print()
+        warn("AWS SSO login may have failed or timed out.")
+        warn("Continuing anyway — Bedrock calls will fail if credentials are invalid.")
+    print()
+
+
 def main():
     banner("🎬  KUBERNETES SELF-HEALING DEMO", color="\033[95m")
     print(f"  Started : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Cluster : {CONTEXT}")
     print(f"  Namespace: {NAMESPACE}")
     print(f"  Heal delay: {HEAL_DELAY_SEC}s\n")
+
+    # ── Step 0: Ensure AWS SSO session is active ──────────────────────────────
+    ensure_aws_login()
 
     heal_start = None
 
