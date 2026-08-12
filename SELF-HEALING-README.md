@@ -60,7 +60,7 @@ SELF_HEALING_DRY_RUN=no
 ### 4. Run for Real
 
 ```powershell
-C:\Python311\python.exe -u test_step1_monitoring.py
+C:\Python311\python.exe -u src\test_step1_monitoring.py
 ```
 
 Now self-healing will execute automatically! 🎉
@@ -190,7 +190,7 @@ Common causes:
 
 - **Full Guide**: `SELF-HEALING-GUIDE.md` - Complete documentation with examples
 - **Setup**: `setup-self-healing.ps1` - Automated setup script
-- **Code**: `self_healing.py` - Implementation details
+- **Code**: `src/self_healing.py` - Implementation details
 
 ---
 

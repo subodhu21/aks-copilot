@@ -1,6 +1,6 @@
 # Intentionally broken pods so the agent has something to detect/troubleshoot
 # in a local demo. Deployed to the "default" namespace (matches K8S_NAMESPACE
-# in k8s/local/secret.yaml).
+# in manifests/local/secret.yaml).
 apiVersion: v1
 kind: Pod
 metadata:

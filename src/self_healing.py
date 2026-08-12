@@ -31,8 +31,10 @@ SCALE_UP_MIN_OOM_COUNT = int(os.getenv("SCALE_UP_MIN_OOM_COUNT", "2"))
 SCALE_UP_MAX_REPLICAS = int(os.getenv("SCALE_UP_MAX_REPLICAS", "10"))
 IMAGEPULL_RETRY_MAX_AGE_SECONDS = int(os.getenv("IMAGEPULL_RETRY_MAX_AGE_SECONDS", "1800"))  # 30 minutes
 
-# State tracking file
-_DEFAULT_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "self_healing_state.json")
+# State tracking file — defaults to the project root (one level up from
+# src/), so runtime state stays out of the source folder.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_STATE_FILE = os.path.join(_PROJECT_ROOT, "self_healing_state.json")
 SELF_HEALING_STATE_FILE = os.getenv("SELF_HEALING_STATE_FILE", _DEFAULT_STATE_FILE)
 
 

@@ -276,13 +276,38 @@ Root cause: No GPU nodes available
 Fix: Scale node pool or change nodeSelector
 ```
 
-## ⚙️ Files
+## ⚙️ Project Structure
 
-- **main.py** - FastAPI server and 4-step API routes
-- **agent.py** - AI agent supporting both Azure and Ollama for troubleshooting, operations, remediation, and platform strategy
-- **tools.py** - kubectl helpers, issue detection, namespace snapshot, and safe command execution
-- **mcp_server.py** - MCP server exposing AKS troubleshooting and remediation tools over stdio
-- **requirements.txt** - Python dependencies
+```
+aks-ai-agent/
+├── src/                      # All application logic
+│   ├── agent.py              # AI agent (Azure/Bedrock/Ollama) for troubleshooting, ops, remediation, platform strategy
+│   ├── tools.py               # kubectl helpers, issue detection, namespace snapshot, safe command execution
+│   ├── self_healing.py       # Validate -> execute -> verify -> rollback remediation actions
+│   ├── prompt_loader.py      # Loads prompt templates from prompts/prompts.md
+│   ├── repo_context.py       # Azure DevOps repo context for Helm-specific remediation
+│   ├── helm_config.py        # Helm chart metadata for deployment-specific fixes
+│   ├── keyvault_loader.py    # Resolves @keyvault: secret references
+│   ├── aws_secrets_loader.py # Resolves @awssecret: secret references
+│   ├── test_step1_monitoring.py   # Primary end-to-end test/entrypoint
+│   ├── run-complete-demo.py       # Scripted demo: deploy broken pods -> notify -> heal
+│   └── view_self_healing_stats.py # Self-healing history/stats viewer
+├── prompts/
+│   └── prompts.md            # AI prompt templates (edit wording here, no code changes needed)
+├── manifests/                # All Kubernetes YAML manifests
+│   ├── namespace.yaml, rbac.yaml, pvc.yaml, secret.yaml, cronjob.yaml
+│   ├── local/                # Local minikube demo manifests (job, pvc, secret, broken pods)
+│   └── demo-deployments/     # Scripted demo manifests (broken + fixed + healthy pod)
+├── requirements.txt          # Python dependencies (kept at project root)
+├── .env / .env.example       # Configuration (kept at project root)
+└── Dockerfile
+```
+
+Run any script from the project root, e.g.:
+```bash
+python src/test_step1_monitoring.py
+python src/run-complete-demo.py
+```
 
 ## 🔧 Troubleshooting
 
@@ -341,8 +366,7 @@ kubectl get pods -n <namespace>
 1. **Use Managed Identity for Azure** - Replace API key with Azure AD authentication in production
 2. **Database** - Store analysis history and trends
 3. **Webhooks** - Auto-analyze pod failures in real-time
-4. **Dashboard** - Web UI for analysis history and trends
-5. **Multi-model** - Add Mistral, Qwen for comparison
+4. **Multi-model** - Add Mistral, Qwen for comparison
 
 ## 📄 License
 

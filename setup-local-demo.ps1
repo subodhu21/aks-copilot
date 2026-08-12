@@ -177,8 +177,8 @@ if ($Reset) {
     Write-Step "Resetting demo resources on existing cluster '$ClusterName'"
     kubectl config use-context $ClusterName
     kubectl delete job aks-ai-agent-demo -n platform-ops --ignore-not-found
-    kubectl delete -f k8s/local/demo-broken-pods.yaml --ignore-not-found
-    kubectl apply -f k8s/local/demo-broken-pods.yaml
+    kubectl delete -f manifests/local/demo-broken-pods.yaml --ignore-not-found
+    kubectl apply -f manifests/local/demo-broken-pods.yaml
 }
 else {
     # -----------------------------------------------------------------------
@@ -240,14 +240,14 @@ else {
     # 3. Namespace, RBAC, PVC, Secret
     # -----------------------------------------------------------------------
     Write-Step "Applying namespace + RBAC"
-    kubectl apply -f k8s/namespace.yaml
-    kubectl apply -f k8s/rbac.yaml
+    kubectl apply -f manifests/namespace.yaml
+    kubectl apply -f manifests/rbac.yaml
 
     Write-Step "Applying local PVC (storageClassName: standard)"
-    kubectl apply -f k8s/local/pvc.yaml
+    kubectl apply -f manifests/local/pvc.yaml
 
     Write-Step "Applying local Secret"
-    $secretYaml = Get-Content k8s/local/secret.yaml -Raw
+    $secretYaml = Get-Content manifests/local/secret.yaml -Raw
     $secretYaml = $secretYaml.Replace('__AI_PROVIDER__', $AiProvider)
     $secretYaml = $secretYaml.Replace('__AZURE_ENDPOINT__', $AzureEndpoint)
     $secretYaml = $secretYaml.Replace('__AZURE_MODEL__', $AzureModelDeployment)
@@ -268,7 +268,7 @@ else {
     # 4. Demo broken pods
     # -----------------------------------------------------------------------
     Write-Step "Deploying demo broken pods (CrashLoopBackOff, ImagePullBackOff)"
-    kubectl apply -f k8s/local/demo-broken-pods.yaml
+    kubectl apply -f manifests/local/demo-broken-pods.yaml
 }
 
 # ---------------------------------------------------------------------------
@@ -276,7 +276,7 @@ else {
 # ---------------------------------------------------------------------------
 Write-Step "Running the agent (one-off Job)"
 kubectl delete job aks-ai-agent-demo -n platform-ops --ignore-not-found
-$jobYaml = (Get-Content k8s/local/job.yaml -Raw).Replace('__IMAGE__', $ImageName)
+$jobYaml = (Get-Content manifests/local/job.yaml -Raw).Replace('__IMAGE__', $ImageName)
 $jobYaml | kubectl apply -f -
 
 Write-Host "Waiting for pod to be scheduled..."

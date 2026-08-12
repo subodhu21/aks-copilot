@@ -39,7 +39,7 @@ Run the monitoring test to see what actions would be taken:
 
 ```powershell
 cd C:\aks-ai-agent
-C:\Python311\python.exe -u test_step1_monitoring.py
+C:\Python311\python.exe -u src\test_step1_monitoring.py
 ```
 
 You'll see output like:

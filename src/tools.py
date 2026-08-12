@@ -20,8 +20,10 @@ resolve_aws_secret_refs()
 # Notification deduplication state
 # ---------------------------------------------------------------------------
 # State file path — override with NOTIFICATION_STATE_FILE env var.
-# Defaults to notification_state.json next to this script.
-_DEFAULT_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notification_state.json")
+# Defaults to notification_state.json at the project root (one level up
+# from src/), so runtime state stays out of the source folder.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_STATE_FILE = os.path.join(_PROJECT_ROOT, "notification_state.json")
 NOTIFICATION_STATE_FILE = os.getenv("NOTIFICATION_STATE_FILE", _DEFAULT_STATE_FILE)
 
 # How long (seconds) to suppress re-notifications for the same pod+reason.
@@ -75,18 +77,37 @@ def _save_notification_state(state: dict) -> None:
         json.dump(state, f, indent=2)
 
 
+def _deployment_key(pod_name: str) -> str:
+    """Best-effort deployment name from a pod name (strip replicaset+pod hash suffix)."""
+    parts = pod_name.split("-")
+    return "-".join(parts[:-2]) if len(parts) > 2 else pod_name
+
+
 def _notification_key(pod_name: str, namespace: str) -> str:
-    return f"{namespace}/{pod_name}"
+    """Cooldown key, scoped to the DEPLOYMENT rather than the exact pod name.
+
+    Kubernetes (and our own self-healing actions) recreate pods with a fresh
+    random suffix on every restart/recreate — so keying cooldown on the exact
+    pod name means the cooldown resets every time the pod is recreated, even
+    though it's the same underlying failure. Keying on the deployment name
+    instead means "this deployment already alerted in the last N seconds" is
+    tracked correctly across pod recreations, matching how notifications are
+    already grouped by deployment.
+    """
+    return f"{namespace}/{_deployment_key(pod_name)}"
 
 
 def _should_notify(pod_name: str, namespace: str, state: dict) -> bool:
     """Return True if a notification should be sent (not seen within cooldown).
 
-    Cooldown is tracked per pod (not per pod+reason) — a crash-looping pod can
-    be observed with different transient reasons across polls (CrashLoopBackOff,
-    Error, HighRestartCount (N) with N changing every run), so keying on the
-    exact reason text would falsely treat every reason change as a new issue
-    (spamming) or as a recovery (see _find_recovered_pods below).
+    Cooldown is tracked per deployment (not per exact pod name or per reason)
+    — a crash-looping pod can be observed with different transient reasons
+    across polls (CrashLoopBackOff, Error, HighRestartCount (N) with N
+    changing every run) and can be recreated with a new pod name (manually,
+    by Kubernetes, or by our own self-healing actions), so keying on anything
+    more specific than the deployment would falsely treat every reason change
+    or pod recreation as a brand-new issue (spamming) instead of a continuation
+    of the same one.
     """
     entry = state.get(_notification_key(pod_name, namespace))
     if entry is None:
@@ -128,12 +149,6 @@ def _find_recovered_pods(state: dict, active_pods: list) -> list:
             last_reason = entry.get("reason", "Unknown") if isinstance(entry, dict) else "Unknown"
             recovered.append({"pod_name": pod_name, "namespace": namespace, "reason": last_reason})
     return recovered
-
-
-def _deployment_key(pod_name: str) -> str:
-    """Best-effort deployment name from a pod name (strip replicaset+pod hash suffix)."""
-    parts = pod_name.split("-")
-    return "-".join(parts[:-2]) if len(parts) > 2 else pod_name
 
 
 def _group_pods_by_deployment(pods: list) -> dict:

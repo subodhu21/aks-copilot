@@ -59,7 +59,7 @@ Write-Host "(No actual changes will be made)" -ForegroundColor Yellow
 Write-Host ""
 
 # Run test
-C:\Python311\python.exe -u test_step1_monitoring.py
+C:\Python311\python.exe -u src\test_step1_monitoring.py
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
