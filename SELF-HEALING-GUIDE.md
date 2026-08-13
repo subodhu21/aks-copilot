@@ -12,7 +12,49 @@ Self-healing automatically fixes common pod issues:
 2. **Auto-Scale on Resource Pressure** - Increases replicas when pods are OOMKilled
 3. **Retry ImagePullBackOff** - Deletes pods to retry transient registry issues
 
-Each action follows a **validate → execute → verify** pattern with safety checks and rollback capabilities.
+Each action follows a **validate → score confidence → execute → verify → rollback** pattern with safety checks, confidence scoring, and rollback capabilities.
+
+---
+
+## 🎯 Confidence Scoring (New)
+
+Passing `validate_safety()` only means an action is *allowed* (not a
+StatefulSet, within cooldown, under the rate limit). It does **not** mean the
+evidence strongly supports that THIS specific action will fix the problem. A
+pod that just crossed the restart threshold by 1 is technically "safe" to
+restart, but the evidence that a blind restart helps is much weaker than for
+a pod that's crashed 30 times.
+
+To capture that distinction, every action now implements `calculate_confidence()`,
+which runs right after `validate_safety()` passes and produces a 0-100 score:
+
+| Action | Confidence factors (0-100 total) |
+|---|---|
+| `RestartCrashLoopPod` | Restart count margin above threshold (0-40) · Time since last self-healing restart of this pod (0-30) · Exact `CrashLoopBackOff` reason vs. heuristic (0-30) |
+| `ScaleUpOnResourcePressure` | OOMKilled pod count margin above threshold (0-40) · Headroom to max replicas (0-30) · Relative size of the scale-up (0-30) |
+| `RetryImagePull` | Pod age relative to the max-age transient-issue window (0-50) · Exact image-pull reason (0-30) · No prior retry recorded (0-20) |
+
+If the score is below `SELF_HEALING_MIN_CONFIDENCE` (default **40**), the
+action is rejected — even though it passed the safety check — and the
+rejection reason includes the full factor breakdown, e.g.:
+
+```
+Confidence too low to auto-execute: 25/100 (minimum 40).
++20 Restart count 3 vs threshold 3; +5 Reason (HighRestartCount (3))
+is not a strong crash-loop signal; +0 A self-healing restart already
+happened recently (12 min ago) — repeat crash suggests a persistent issue
+```
+
+Configure the threshold in `.env`:
+
+```ini
+# 0 disables the confidence gate entirely (falls back to safety-check-only behavior)
+SELF_HEALING_MIN_CONFIDENCE=40
+```
+
+The computed `confidence` dict (`score`, `level`, `factors`) is included in
+every action result returned by `.run()`, and appears in `self_healing_state.json`
+history alongside the existing `safety_check` field.
 
 ---
 
@@ -81,6 +123,7 @@ Now actions will execute automatically!
 | `SELF_HEALING_MODE` | auto/ask/disabled | ask | Execution mode (see below) |
 | `SELF_HEALING_DRY_RUN` | yes/no | no | Test mode - logs actions without executing |
 | `SELF_HEALING_MAX_ACTIONS_PER_HOUR` | number | 10 | Rate limit to prevent runaway automation |
+| `SELF_HEALING_MIN_CONFIDENCE` | 0-100 | 40 | Minimum confidence score required to execute an action that already passed its safety check (see "Confidence Scoring" above). 0 disables the gate. |
 
 ### Execution Modes
 

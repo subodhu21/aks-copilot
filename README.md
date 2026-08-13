@@ -252,6 +252,35 @@ Step 4: Platform Engineering Advisor
 4. **Step 3 - Remediation Engine**: Produces safe command plans and optional allowlisted execution
 5. **Step 4 - Platform Assistant**: Produces platform roadmap, SLOs, and golden-path recommendations
 
+## 🎯 Confidence Scoring
+
+Every pod-failure notification (Teams/Slack) includes a **diagnosis confidence
+score (0-100, High/Medium/Low)** alongside the root cause and fix. This is a
+deterministic, rule-based score — not a number the AI model self-reports (LLMs
+are unreliable at that). It measures how much corroborating evidence backs the
+classification, computed in `calculate_diagnosis_confidence()` (`src/tools.py`)
+from four weighted factors:
+
+| Factor | Points | What it measures |
+|---|---|---|
+| Reason specificity | 0-30 | Exact K8s reason (`CrashLoopBackOff`, `OOMKilled`) vs. a derived heuristic (`HighRestartCount`, `Pending`) |
+| Log evidence strength | 0-25 | Logs matched a specific root-cause keyword vs. only a generic error/exception vs. no logs at all |
+| Context grounding | 0-20 | Deployment is repo-managed (Helm values + peer-env comparison available) vs. a system pod with no repo context |
+| Classification certainty | 0-25 | `_classify_issue()` landed on a specific category vs. an ambiguous/unknown bucket |
+
+Each notification shows the full factor breakdown so you (or a demo audience)
+can see exactly why a score landed where it did.
+
+The same idea extends to **self-healing actions** (`src/self_healing.py`).
+Every action's `run()` lifecycle now does: `validate_safety()` (binary — is
+this allowed at all: StatefulSet check, rate limit, cooldown) → **`calculate_confidence()`**
+(graduated — how strong is the evidence THIS action will actually help, e.g.
+restart count margin above threshold, pod age relative to the transient-issue
+window, whether we already tried this recently) → execute → verify → rollback.
+Actions that pass safety but score below `SELF_HEALING_MIN_CONFIDENCE`
+(default 40) are rejected before execution, with the factor breakdown recorded
+in the action result.
+
 ## 📝 Example Use Cases
 
 ### Pod keeps crashing

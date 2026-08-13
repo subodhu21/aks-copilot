@@ -102,7 +102,12 @@ else:
             safe = safety.get('safe', False)
             reason = safety.get('reason', 'N/A')
             print(f"   Safety Check: {'PASS' if safe else 'FAIL'} - {reason}")
-        
+
+        # Confidence score
+        confidence = action.get('confidence', {})
+        if confidence:
+            print(f"   Confidence: {confidence.get('score', 'N/A')}/100 ({confidence.get('level', 'N/A')})")
+
         # Message
         message = action.get('message', 'N/A')
         if len(message) > 100:

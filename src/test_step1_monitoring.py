@@ -39,6 +39,9 @@ for namespace in NAMESPACES:
             if isinstance(notif, dict):
                 print(f"  - Status: {notif.get('status', 'unknown')}")
                 print(f"    Message: {notif.get('message', notif.get('error', 'N/A'))}")
+                confidence = notif.get("confidence")
+                if confidence:
+                    print(f"    Diagnosis Confidence: {confidence.get('score')}/100 ({confidence.get('level')})")
 
         pr_results = result["data"].get("pr_results", [])
         if pr_results:
@@ -73,6 +76,9 @@ for namespace in NAMESPACES:
                     print(f"    Pod: {action.get('pod_name', 'N/A')}")
                     print(f"    Status: {action.get('status', 'unknown')}")
                     print(f"    Message: {action.get('message', 'N/A')}")
+                    confidence = action.get("confidence")
+                    if confidence:
+                        print(f"    Confidence: {confidence.get('score')}/100 ({confidence.get('level')})")
             
             actions_skipped = self_healing.get("actions_skipped", [])
             if actions_skipped:
@@ -81,6 +87,9 @@ for namespace in NAMESPACES:
                     print(f"  - {action.get('action_type', 'Unknown')}")
                     print(f"    Pod: {action.get('pod_name', 'N/A')}")
                     print(f"    Reason: {action.get('message', action.get('reason', 'N/A'))}")
+                    confidence = action.get("confidence")
+                    if confidence:
+                        print(f"    Confidence: {confidence.get('score')}/100 ({confidence.get('level')})")
     else:
         print(f"Error: {result.get('error', 'Unknown error')}")
 

@@ -789,6 +789,149 @@ def _classify_issue(reason, error_logs, is_repo_managed):
     return "❓ Unknown Issue", "Dev + Ops team"
 
 
+# Keywords considered "generic" catch-all evidence in logs — they show *something*
+# went wrong but aren't tied to a specific, actionable root cause on their own.
+_GENERIC_LOG_KEYWORDS = ("exception", "error", "unhandled", "fatal", "panic", "stacktrace", "traceback")
+
+# Keywords that DO point at a specific, actionable root cause (mirrors the
+# groups checked in _classify_issue). Used to tell "generic error noise" apart
+# from "we matched a specific category" when scoring log evidence strength.
+_SPECIFIC_LOG_KEYWORDS = (
+    "keyvault", "key vault", "secretnotfound", "azure.requestfailedexception",
+    "oomkilled", "nullpointerexception", "cannot invoke", "getenv", "getenvironment",
+    "getproperty", "missing required", "no value for",
+    "connection refused", "connection timeout", "connection timed out", "econnrefused",
+    "unable to connect", "could not connect", "no route to host", "network is unreachable",
+    "host unreachable", "connect timed out",
+    "unauthorizedaccessexception", "forbidden", "401", "403", "access denied", "permission denied",
+)
+
+# K8s-native status/waiting/terminated reasons that are exact, unambiguous signals
+# (as opposed to reasons WE derive heuristically, like HighRestartCount or AppError).
+_STRONG_REASON_SIGNALS = {
+    "CrashLoopBackOff", "OOMKilled", "ImagePullBackOff", "ErrImagePull",
+    "ImageInspectError", "Failed",
+}
+
+
+def _extract_restart_count(reason):
+    """Pull the numeric count out of a reason like 'HighRestartCount (7)'."""
+    import re
+    if not reason:
+        return 0
+    m = re.search(r'\((\d+)\)', reason)
+    return int(m.group(1)) if m else 0
+
+
+def calculate_diagnosis_confidence(reason, error_logs, is_repo_managed, issue_category, restart_count=0):
+    """
+    Compute an explainable confidence score (0-100) for a pod-failure diagnosis.
+
+    IMPORTANT: this is a deterministic, RULE-BASED score, not a statistical or
+    model-derived probability of correctness. The AI model itself is never
+    asked to self-report a confidence number (LLMs are notoriously unreliable
+    at that). Instead, this function scores how much corroborating EVIDENCE
+    backed the classification made by _classify_issue() — the more specific
+    and complete the signals, the higher the score. Every point is traceable
+    to a concrete factor, which is what makes it explainable in a demo.
+
+    Four weighted factors (each independently capped) make up the total:
+
+      1. Reason specificity      (0-30) — did Kubernetes report an exact,
+         unambiguous reason (CrashLoopBackOff, OOMKilled, ...) or a fuzzy,
+         heuristically-derived one (HighRestartCount, AppError, Pending)?
+      2. Log evidence strength   (0-25) — did we match a SPECIFIC root-cause
+         keyword (e.g. "connection refused", "keyvault") or only the generic
+         catch-all ("exception", "error")? No logs at all scores 0.
+      3. Context grounding       (0-20) — do we have a real Helm values file
+         and peer-environment comparison to ground the recommended fix, or is
+         this a system/infra pod with no repo context (generic advice only)?
+      4. Classification certainty (0-25) — did _classify_issue() land on a
+         specific category, or fall through to an ambiguous bucket like
+         "Root Cause Unclear" or "Unknown Issue"?
+
+    Returns:
+        {
+            "score": int 0-100,
+            "level": "High" | "Medium" | "Low",
+            "factors": [ "+30 ...", "+12 ...", ... ]   # human-readable breakdown
+        }
+    """
+    factors = []
+
+    # ---- 1. Reason specificity (0-30) ----
+    if reason in _STRONG_REASON_SIGNALS:
+        pts = 30
+        factors.append(f"+{pts} Kubernetes reported an exact failure reason ({reason})")
+    elif reason and reason.startswith("HighRestartCount"):
+        # More restarts = more corroborating samples of the same failure.
+        if restart_count >= 10:
+            pts = 20
+        elif restart_count >= 5:
+            pts = 15
+        else:
+            pts = 10
+        factors.append(f"+{pts} Derived from restart-count pattern ({reason}, {restart_count} restarts observed)")
+    elif reason and reason.startswith("AppError"):
+        pts = 15
+        factors.append(f"+{pts} Derived from log error-line threshold match ({reason})")
+    elif reason == "Pending":
+        pts = 8
+        factors.append(f"+{pts} Scheduling-related reason, but underlying cause not yet isolated (Pending)")
+    else:
+        pts = 5
+        factors.append(f"+{pts} Reason is generic or unclassified ({reason or 'Unknown'})")
+    score = pts
+
+    # ---- 2. Log evidence strength (0-25) ----
+    logs_lower = (error_logs or "").lower().strip()
+    if not logs_lower or logs_lower == "no logs available":
+        pts = 0
+        factors.append(f"+{pts} No log evidence available")
+    elif any(kw in logs_lower for kw in _SPECIFIC_LOG_KEYWORDS):
+        pts = 25
+        factors.append(f"+{pts} Logs matched a specific root-cause keyword group")
+    elif any(kw in logs_lower for kw in _GENERIC_LOG_KEYWORDS):
+        pts = 12
+        factors.append(f"+{pts} Logs show error/exception text, but no specific root-cause keyword matched")
+    else:
+        pts = 8
+        factors.append(f"+{pts} Log evidence present but did not match known error patterns")
+    score += pts
+
+    # ---- 3. Context grounding (0-20) ----
+    if is_repo_managed:
+        pts = 20
+        factors.append(f"+{pts} Deployment is repo-managed — Helm values/peer-env comparison available to ground the fix")
+    else:
+        pts = 8
+        factors.append(f"+{pts} System/infrastructure pod — no repo context available, guidance is generic")
+    score += pts
+
+    # ---- 4. Classification certainty (0-25) ----
+    if issue_category == "❓ Unknown Issue":
+        pts = 0
+        factors.append(f"+{pts} Classifier could not determine a specific issue category")
+    elif "Root Cause Unclear" in issue_category:
+        pts = 8
+        factors.append(f"+{pts} Classifier flagged repeated restarts but could not isolate root cause")
+    else:
+        pts = 25
+        factors.append(f"+{pts} Classifier matched a specific issue category ({issue_category})")
+    score += pts
+
+    score = max(0, min(100, score))
+
+    if score >= 75:
+        level = "High"
+    elif score >= 45:
+        level = "Medium"
+    else:
+        level = "Low"
+
+    return {"score": score, "level": level, "factors": factors}
+
+
 def _sanitize_markdown_for_teams(text):
     """Remove markdown heading syntax to ensure consistent font sizing in Teams."""
     import re
@@ -935,6 +1078,16 @@ def _build_notification_content(pod_name, namespace, status, reason, error_logs,
     # Classify the issue for the notification header
     issue_category, action_owner = _classify_issue(reason, error_logs, is_repo_managed)
 
+    # Score how much corroborating evidence backs this classification (see
+    # calculate_diagnosis_confidence for the factor breakdown/rationale).
+    confidence = calculate_diagnosis_confidence(
+        reason=reason,
+        error_logs=error_logs,
+        is_repo_managed=is_repo_managed,
+        issue_category=issue_category,
+        restart_count=_extract_restart_count(reason),
+    )
+
     try:
         # Get AI explanation of the issue using error logs, Helm context, and repo context
         # Include all deployment details so AI can generate exact Helm-specific fixes
@@ -999,6 +1152,7 @@ def _build_notification_content(pod_name, namespace, status, reason, error_logs,
         "repo_name": repo_name,
         "repo_url": repo_url,
         "is_repo_managed": is_repo_managed,
+        "confidence": confidence,
         "error_summary": error_logs[:1500] if error_logs else "No logs available",
         "timestamp": datetime.now().strftime("%B %d, %Y at %I:%M %p"),
     }
@@ -1122,8 +1276,11 @@ def send_teams_notification(pod_name, namespace, status, reason, error_logs, k8s
     repo_name = content["repo_name"]
     repo_url = content["repo_url"]
     is_repo_managed = content["is_repo_managed"]
+    confidence = content["confidence"]
     error_summary = content["error_summary"]
     timestamp = content["timestamp"]
+
+    confidence_icon = {"High": "🟢", "Medium": "🟡", "Low": "🔴"}.get(confidence["level"], "⚪")
 
     # Create color based on failure reason
     theme_color = "cc0000"  # Red for errors
@@ -1154,6 +1311,10 @@ def send_teams_notification(pod_name, namespace, status, reason, error_logs, k8s
         {
             "name": "🏷️ Issue Category:",
             "value": f"**{issue_category}**"
+        },
+        {
+            "name": f"{confidence_icon} Diagnosis Confidence:",
+            "value": f"**{confidence['score']}/100 ({confidence['level']})**"
         },
         {
             "name": "⏰ Detected At:",
@@ -1195,6 +1356,12 @@ def send_teams_notification(pod_name, namespace, status, reason, error_logs, k8s
                 "activityTitle": "🧠 Intelligent RCA — AI-Powered Insights",
                 "markdown": True,
                 "text": ai_explanation
+            },
+            # DIAGNOSIS CONFIDENCE BREAKDOWN
+            {
+                "activityTitle": f"{confidence_icon} Diagnosis Confidence — {confidence['score']}/100 ({confidence['level']})",
+                "markdown": True,
+                "text": "\n".join(f"- {f}" for f in confidence["factors"]),
             },
             # AI SOLUTION SECTION
             {
@@ -1245,7 +1412,8 @@ def send_teams_notification(pod_name, namespace, status, reason, error_logs, k8s
             return {
                 "status": "sent",
                 "pod": pod_name,
-                "message": "Notification sent successfully to MS Teams"
+                "message": "Notification sent successfully to MS Teams",
+                "confidence": confidence,
             }
         else:
             return {
@@ -1292,8 +1460,12 @@ def send_slack_notification(pod_name, namespace, status, reason, error_logs, k8s
     repo_name = content["repo_name"]
     repo_url = content["repo_url"]
     is_repo_managed = content["is_repo_managed"]
+    confidence = content["confidence"]
     error_summary = content["error_summary"]
     timestamp = content["timestamp"]
+
+    confidence_icon = {"High": "🟢", "Medium": "🟡", "Low": "🔴"}.get(confidence["level"], "⚪")
+    confidence_breakdown = "\n".join(f"- {f}" for f in confidence["factors"])
 
     # Color bar based on failure reason (matches Teams themeColor)
     bar_color = "#cc0000"  # Red for errors
@@ -1307,6 +1479,7 @@ def send_slack_notification(pod_name, namespace, status, reason, error_logs, k8s
         f"   *Pod Status:* {reason} (phase: {status})",
         f"   *K8s Context:* {k8s_context or os.getenv('K8S_CONTEXT') or 'unknown'}",
         f"   *Issue Category:* {issue_category}",
+        f"   *Diagnosis Confidence:* {confidence_icon} {confidence['score']}/100 ({confidence['level']})",
         f"   *Detected At:* {timestamp}",
     ]
     if related_pods:
@@ -1367,6 +1540,7 @@ def send_slack_notification(pod_name, namespace, status, reason, error_logs, k8s
         {"type": "header", "text": {"type": "plain_text", "text": "🔍 Captured Signal — Log Evidence", "emoji": True}},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"   ```{error_summary}```\n   _Check full logs with_ `kubectl logs -n {namespace} {pod_name}`"}},
         *_split_blocks("🧠 Intelligent RCA — AI-Powered Insights", ai_explanation),
+        *_split_blocks(f"{confidence_icon} Diagnosis Confidence — {confidence['score']}/100 ({confidence['level']})", confidence_breakdown),
         *_split_blocks(solution_title, ai_solution),
         *_split_blocks("🛠️ AI-Generated Recovery Playbook", action_guide),
     ]
@@ -1383,7 +1557,8 @@ def send_slack_notification(pod_name, namespace, status, reason, error_logs, k8s
             return {
                 "status": "sent",
                 "pod": pod_name,
-                "message": "Notification sent successfully to Slack"
+                "message": "Notification sent successfully to Slack",
+                "confidence": confidence,
             }
         else:
             return {

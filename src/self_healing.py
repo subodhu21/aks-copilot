@@ -31,6 +31,15 @@ SCALE_UP_MIN_OOM_COUNT = int(os.getenv("SCALE_UP_MIN_OOM_COUNT", "2"))
 SCALE_UP_MAX_REPLICAS = int(os.getenv("SCALE_UP_MAX_REPLICAS", "10"))
 IMAGEPULL_RETRY_MAX_AGE_SECONDS = int(os.getenv("IMAGEPULL_RETRY_MAX_AGE_SECONDS", "1800"))  # 30 minutes
 
+# Minimum confidence score (0-100) required to actually execute an action that
+# has already PASSED its binary validate_safety() gate. Safety checks answer
+# "is this allowed at all" (StatefulSet, rate limit, cooldown, ...); confidence
+# answers "how strong is the evidence that this specific action will help"
+# (e.g. restart count barely over threshold vs. way over, pod age relative to
+# the transient-issue window, etc). Set to 0 to disable this extra gate and
+# rely on validate_safety() alone.
+SELF_HEALING_MIN_CONFIDENCE = int(os.getenv("SELF_HEALING_MIN_CONFIDENCE", "40"))
+
 # State tracking file — defaults to the project root (one level up from
 # src/), so runtime state stays out of the source folder.
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -55,7 +64,24 @@ class SelfHealingAction:
     def validate_safety(self) -> Dict[str, Any]:
         """Check if action is safe to execute. Return dict with 'safe': bool, 'reason': str"""
         raise NotImplementedError
-        
+
+    def calculate_confidence(self) -> Dict[str, Any]:
+        """
+        Score (0-100) how strong the evidence is that THIS action will actually
+        fix the problem, given the signals available. This is separate from
+        validate_safety(): safety is a binary "is this allowed at all" gate
+        (StatefulSet? rate limit? cooldown?), while confidence is a graduated
+        "how much do the numbers support taking this action right now".
+
+        Subclasses override this with action-specific factors. Default here
+        is a neutral mid-score so any action type that doesn't override it
+        still runs (matches pre-confidence behavior) rather than being
+        silently blocked.
+
+        Return dict with 'score': int 0-100, 'level': str, 'factors': list[str]
+        """
+        return {"score": 50, "level": "Medium", "factors": ["No confidence model implemented for this action type"]}
+
     def execute(self) -> Dict[str, Any]:
         """Perform the healing action. Return dict with 'success': bool, 'message': str"""
         raise NotImplementedError
@@ -89,7 +115,21 @@ class SelfHealingAction:
             result["status"] = "rejected"
             result["message"] = f"Safety check failed: {safety_check.get('reason', 'Unknown')}"
             return result
-            
+
+        # Step 1b: Score confidence — a safety-check pass only means the action
+        # is ALLOWED, not that the evidence strongly supports it. Actions below
+        # the configured threshold are rejected here even though they're safe.
+        confidence = self.calculate_confidence()
+        result["confidence"] = confidence
+
+        if confidence.get("score", 0) < SELF_HEALING_MIN_CONFIDENCE:
+            result["status"] = "rejected"
+            result["message"] = (
+                f"Confidence too low to auto-execute: {confidence.get('score', 0)}/100 "
+                f"(minimum {SELF_HEALING_MIN_CONFIDENCE}). {'; '.join(confidence.get('factors', []))}"
+            )
+            return result
+
         # Step 2: Execute action
         if SELF_HEALING_DRY_RUN:
             result["status"] = "dry_run"
@@ -177,7 +217,73 @@ class RestartCrashLoopPod(SelfHealingAction):
             pass
             
         return {"safe": True, "reason": "All safety checks passed"}
-        
+
+    def calculate_confidence(self) -> Dict[str, Any]:
+        """
+        Score confidence that deleting this pod will actually resolve the
+        crash loop, based on:
+          1. Restart count margin above threshold (0-40) — a pod barely over
+             the threshold is weaker evidence than one that's crashed dozens
+             of times; deleting it is more likely to just recreate the same
+             crash if it's a persistent config/code bug rather than transient.
+          2. Time since last self-healing restart of this pod (0-30) — if we
+             already tried this once recently and it's back, our confidence
+             that ANOTHER blind restart will help (vs. needing a real fix)
+             drops even though the cooldown window itself has passed.
+          3. Waiting reason specificity (0-30) — an exact CrashLoopBackOff
+             reason is stronger evidence than a generic high-restart pattern
+             with no clear waiting reason.
+        """
+        factors = []
+        score = 0
+
+        restart_count = self.pod_info.get("restart_count", 0)
+        if restart_count >= RESTART_MIN_CRASH_COUNT * 3:
+            pts = 40
+        elif restart_count >= RESTART_MIN_CRASH_COUNT * 2:
+            pts = 30
+        elif restart_count >= RESTART_MIN_CRASH_COUNT:
+            pts = 20
+        else:
+            pts = 0
+        factors.append(f"+{pts} Restart count {restart_count} vs threshold {RESTART_MIN_CRASH_COUNT}")
+        score += pts
+
+        state = _load_state()
+        last_action = state.get("actions", {}).get(f"{self.namespace}/{self.pod_name}")
+        if not last_action:
+            pts = 30
+            factors.append(f"+{pts} No prior self-healing restart recorded for this pod")
+        else:
+            elapsed = time.time() - last_action.get("timestamp", 0)
+            hours = elapsed / 3600
+            if hours >= 24:
+                pts = 25
+                factors.append(f"+{pts} Last self-healing restart was {hours:.1f}h ago (well outside cooldown)")
+            elif hours >= 1:
+                pts = 15
+                factors.append(f"+{pts} Last self-healing restart was {hours:.1f}h ago")
+            else:
+                pts = 5
+                factors.append(f"+{pts} A self-healing restart already happened recently ({hours*60:.0f} min ago) — repeat crash suggests a persistent issue")
+        score += pts
+
+        reason = (self.reason or "").lower()
+        if "crashloopbackoff" in reason:
+            pts = 30
+            factors.append(f"+{pts} Exact CrashLoopBackOff reason reported by Kubernetes")
+        elif reason.startswith("highrestartcount"):
+            pts = 15
+            factors.append(f"+{pts} Derived from restart-count heuristic, not an exact K8s reason")
+        else:
+            pts = 5
+            factors.append(f"+{pts} Reason ({self.reason}) is not a strong crash-loop signal")
+        score += pts
+
+        score = max(0, min(100, score))
+        level = "High" if score >= 70 else "Medium" if score >= 40 else "Low"
+        return {"score": score, "level": level, "factors": factors}
+
     def execute(self) -> Dict[str, Any]:
         from tools import run_cmd
         
@@ -300,7 +406,73 @@ class ScaleUpOnResourcePressure(SelfHealingAction):
             "safe": True,
             "reason": f"Will scale from {self.original_replicas} to {self.target_replicas} replicas"
         }
-        
+
+    def calculate_confidence(self) -> Dict[str, Any]:
+        """
+        Score confidence that scaling up will relieve the OOM pressure:
+          1. OOMKilled pod count margin above threshold (0-40) — more affected
+             pods is stronger evidence of a genuine capacity/traffic problem
+             rather than one noisy container.
+          2. Headroom to max replicas (0-30) — scaling from 8->10 (near the
+             cost-protection ceiling) is weaker long-term evidence that this
+             fixes things vs. scaling from 2->4, since we'll hit the ceiling
+             again soon under sustained load.
+          3. Scale-up magnitude relative to current size (0-30) — doubling-ish
+             capacity is a more meaningful mitigation than a marginal +2 on an
+             already-large deployment (bigger relative increase, more evidence
+             it meaningfully reduces per-pod memory contention/scheduling load).
+        """
+        factors = []
+        score = 0
+
+        oom_count = len(self.pods)
+        if oom_count >= SCALE_UP_MIN_OOM_COUNT * 3:
+            pts = 40
+        elif oom_count >= SCALE_UP_MIN_OOM_COUNT * 2:
+            pts = 28
+        elif oom_count >= SCALE_UP_MIN_OOM_COUNT:
+            pts = 18
+        else:
+            pts = 0
+        factors.append(f"+{pts} {oom_count} OOMKilled pod(s) vs threshold {SCALE_UP_MIN_OOM_COUNT}")
+        score += pts
+
+        if self.original_replicas is not None:
+            headroom = SCALE_UP_MAX_REPLICAS - self.original_replicas
+            if headroom >= 6:
+                pts = 30
+                factors.append(f"+{pts} Plenty of headroom to max replicas ({self.original_replicas}/{SCALE_UP_MAX_REPLICAS})")
+            elif headroom >= 3:
+                pts = 20
+                factors.append(f"+{pts} Moderate headroom to max replicas ({self.original_replicas}/{SCALE_UP_MAX_REPLICAS})")
+            else:
+                pts = 8
+                factors.append(f"+{pts} Close to max replicas ceiling ({self.original_replicas}/{SCALE_UP_MAX_REPLICAS}) — scaling won't help for long under sustained load")
+        else:
+            pts = 0
+            factors.append(f"+{pts} Could not determine current replica count")
+        score += pts
+
+        if self.original_replicas and self.target_replicas:
+            relative_increase = (self.target_replicas - self.original_replicas) / self.original_replicas
+            if relative_increase >= 0.5:
+                pts = 30
+                factors.append(f"+{pts} Scale-up is a large relative increase ({self.original_replicas}→{self.target_replicas})")
+            elif relative_increase >= 0.2:
+                pts = 20
+                factors.append(f"+{pts} Scale-up is a moderate relative increase ({self.original_replicas}→{self.target_replicas})")
+            else:
+                pts = 8
+                factors.append(f"+{pts} Scale-up is a small relative increase ({self.original_replicas}→{self.target_replicas}) on an already-large deployment")
+        else:
+            pts = 0
+            factors.append(f"+{pts} Could not compute scale-up magnitude")
+        score += pts
+
+        score = max(0, min(100, score))
+        level = "High" if score >= 70 else "Medium" if score >= 40 else "Low"
+        return {"score": score, "level": level, "factors": factors}
+
     def execute(self) -> Dict[str, Any]:
         from tools import run_cmd
         
@@ -415,7 +587,80 @@ class RetryImagePull(SelfHealingAction):
                 }
                 
         return {"safe": True, "reason": "Will retry image pull"}
-        
+
+    def calculate_confidence(self) -> Dict[str, Any]:
+        """
+        Score confidence that this ImagePullBackOff is transient (registry
+        blip) rather than a persistent config issue (bad tag, missing auth),
+        based on:
+          1. Pod age relative to the max-age window (0-50) — the newer the
+             pod, the more likely this is a transient registry timeout rather
+             than a real misconfiguration that a retry won't fix.
+          2. Exact reason match (0-30) — ImagePullBackOff/ErrImagePull are
+             precise K8s-reported reasons; anything looser is weaker evidence.
+          3. No prior retry recorded (0-20) — if we've already retried this
+             pod before and it's still failing, that's evidence AGAINST a
+             transient cause, so confidence in a repeat retry drops.
+        """
+        from tools import run_cmd
+        factors = []
+        score = 0
+
+        age_seconds = None
+        try:
+            cmd = f"kubectl get pod {self.pod_name} -n {self.namespace} -o json"
+            output = run_cmd(cmd, self.k8s_context)
+            pod_json = json.loads(output)
+            creation_time = pod_json.get("metadata", {}).get("creationTimestamp", "")
+            if creation_time:
+                from dateutil import parser as date_parser
+                created_at = date_parser.parse(creation_time)
+                age_seconds = (datetime.now(created_at.tzinfo) - created_at).total_seconds()
+        except Exception:
+            pass
+
+        if age_seconds is None:
+            pts = 20
+            factors.append(f"+{pts} Could not determine pod age; assuming moderate confidence")
+        else:
+            age_ratio = age_seconds / IMAGEPULL_RETRY_MAX_AGE_SECONDS
+            if age_ratio <= 0.2:
+                pts = 50
+                factors.append(f"+{pts} Pod is very new ({age_seconds/60:.1f} min old) — strong evidence of a transient registry issue")
+            elif age_ratio <= 0.5:
+                pts = 35
+                factors.append(f"+{pts} Pod age ({age_seconds/60:.1f} min) is well within the transient-issue window")
+            elif age_ratio <= 1.0:
+                pts = 15
+                factors.append(f"+{pts} Pod age ({age_seconds/60:.1f} min) is approaching the max-age cutoff — less likely transient")
+            else:
+                pts = 0
+                factors.append(f"+{pts} Pod age exceeds max-age window — likely a persistent config issue")
+        score += pts
+
+        reason = (self.reason or "")
+        if reason in ("ImagePullBackOff", "ErrImagePull", "ImageInspectError"):
+            pts = 30
+            factors.append(f"+{pts} Exact image-pull failure reason reported by Kubernetes ({reason})")
+        else:
+            pts = 10
+            factors.append(f"+{pts} Reason ({reason}) is not an exact image-pull signal")
+        score += pts
+
+        state = _load_state()
+        last_action = state.get("actions", {}).get(f"{self.namespace}/{self.pod_name}")
+        if not last_action or last_action.get("action_type") != "imagepull_retry":
+            pts = 20
+            factors.append(f"+{pts} No prior image-pull retry recorded for this pod")
+        else:
+            pts = 0
+            factors.append(f"+{pts} Already retried before and still failing — weaker evidence this is transient")
+        score += pts
+
+        score = max(0, min(100, score))
+        level = "High" if score >= 70 else "Medium" if score >= 40 else "Low"
+        return {"score": score, "level": level, "factors": factors}
+
     def execute(self) -> Dict[str, Any]:
         from tools import run_cmd
         
